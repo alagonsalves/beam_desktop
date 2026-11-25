@@ -1,1 +1,2 @@
 - Asked: Create an AGENTS.md at the project top level with the two specified lines, then commit it. Changed: Added AGENTS.md and this prompts.md entry. Worked: Yes.
+- Asked: Update spec.md to describe a Python desktop app using Tkinter and do not build anything. Changed: Replaced spec.md with a Tkinter desktop application specification and added this prompt entry. Worked: Yes.
