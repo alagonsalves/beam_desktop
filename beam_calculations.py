@@ -22,6 +22,17 @@ LUMBER_SECTIONS = (
 )
 
 
+def normalize_span(value):
+    try:
+        span = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("Span must be a number.")
+    if not math.isfinite(span):
+        raise ValueError("Span must be a finite number.")
+    span = max(4.0, min(40.0, span))
+    return round(span * 4.0) / 4.0
+
+
 @dataclass(frozen=True)
 class PointLoad:
     magnitude: float

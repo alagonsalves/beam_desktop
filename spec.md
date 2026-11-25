@@ -41,6 +41,10 @@ floor beam or deck joist.
 ## Inputs
 - Support type: Simply supported or Cantilever (fixed at the left end).
 - Span: 4 to 40 ft.
+- The span slider and numeric entry always show the same clamped, quarter-foot
+  value. Moving the slider updates the entry immediately; editing the entry
+  updates the slider and recalculates. Opening a design applies the same
+  synchronized span value.
 - Loads, listed in an editable panel:
   - Point loads: magnitude (kips, downward positive) and position (ft).
   - Uniform loads: magnitude (kips/ft) and start and end positions (ft).

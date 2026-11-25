@@ -14,6 +14,7 @@ from beam_calculations import (
     design_from_dict,
     design_to_dict,
     find_lightest_passing,
+    normalize_span,
 )
 
 
@@ -62,6 +63,7 @@ class BeamDesignerApp(tk.Tk):
         self._recommendation_cache = None
         self._drag_point_index = None
         self.hover_window = None
+        self._span_syncing = False
 
         self._build_ui()
         self.add_uniform_load(1.0, 0.0, 20.0)
@@ -193,13 +195,15 @@ class BeamDesignerApp(tk.Tk):
         span_row.pack(fill="x", pady=(4, 0))
         self.span_scale = tk.Scale(span_row, from_=4, to=40, resolution=0.25,
                                    orient="horizontal", variable=self.span,
-                                   command=lambda _v: self.schedule_redraw(25),
+                                   command=self._span_slider_changed,
                                    bg="#ffffff", highlightthickness=0)
         self.span_scale.pack(side="left", fill="x", expand=True)
         self.span_entry = ttk.Entry(span_row, width=8)
         self.span_entry.insert(0, "20")
         self.span_entry.pack(side="right", padx=(8, 0))
         self.span_entry.bind("<KeyRelease>", self._span_entry_changed)
+        self.span_entry.bind("<FocusOut>", self._commit_span_entry)
+        self.span_entry.bind("<Return>", self._commit_span_entry)
 
         loads = self._panel_section(parent, "Loads")
         self.load_container = tk.Frame(loads, bg="#ffffff")
@@ -250,13 +254,51 @@ class BeamDesignerApp(tk.Tk):
         content.pack(fill="x", padx=12, pady=(0, 12))
         return content
 
-    def _span_entry_changed(self, _event):
+    def _format_span(self, value):
+        return f"{value:g}"
+
+    def _sync_span(self, value, source):
+        if self._span_syncing:
+            return
+        self._span_syncing = True
         try:
-            value = max(4.0, min(40.0, float(self.span_entry.get())))
-            self.span.set(value)
-            self.schedule_redraw(40)
+            span = normalize_span(value)
+            self.span.set(span)
+            entry_matches = False
+            if source == "entry":
+                try:
+                    entry_matches = float(self.span_entry.get()) == span
+                except (TypeError, ValueError):
+                    entry_matches = False
+            if source != "entry" or not entry_matches:
+                self.span_entry.delete(0, "end")
+                self.span_entry.insert(0, self._format_span(span))
+            self.schedule_redraw(25)
+        finally:
+            self._span_syncing = False
+
+    def _span_slider_changed(self, value):
+        self._sync_span(value, "slider")
+
+    def _span_entry_changed(self, _event):
+        text = self.span_entry.get().strip()
+        if not text or text.endswith("."):
+            return
+        try:
+            value = float(text)
         except ValueError:
-            pass
+            return
+        if value < 4.0:
+            return
+        self._sync_span(value, "entry")
+
+    def _commit_span_entry(self, _event):
+        text = self.span_entry.get().strip()
+        try:
+            value = float(text)
+        except ValueError:
+            value = self.span.get()
+        self._sync_span(value, "entry")
 
     def _material_changed(self, _event):
         if self.material.get() == "lumber":
@@ -723,9 +765,7 @@ class BeamDesignerApp(tk.Tk):
             return
 
         self.support.set(model.support)
-        self.span.set(model.span_ft)
-        self.span_entry.delete(0, "end")
-        self.span_entry.insert(0, str(model.span_ft))
+        self._sync_span(model.span_ft, "open")
         self.material.set(model.material)
         self.section_name.set(model.section_name)
         self.deflection_limit.set(model.deflection_limit)

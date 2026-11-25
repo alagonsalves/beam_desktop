@@ -7,6 +7,7 @@ from beam_calculations import (
     calculate,
     design_from_dict,
     design_to_dict,
+    normalize_span,
 )
 
 
@@ -159,6 +160,14 @@ class BeamCalculationValidationTests(unittest.TestCase):
         for data in invalid_designs:
             with self.assertRaises(ValueError):
                 design_from_dict(data)
+
+    def test_span_normalization(self):
+        self.assertEqual(normalize_span(3), 4.0)
+        self.assertEqual(normalize_span(40.1), 40.0)
+        self.assertEqual(normalize_span(20.1), 20.0)
+        self.assertEqual(normalize_span(20.25), 20.25)
+        with self.assertRaises(ValueError):
+            normalize_span("not-a-number")
 
 
 if __name__ == "__main__":
