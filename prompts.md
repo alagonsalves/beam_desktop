@@ -1,0 +1,1 @@
+- Asked: Create an AGENTS.md at the project top level with the two specified lines, then commit it. Changed: Added AGENTS.md and this prompts.md entry. Worked: Yes.
