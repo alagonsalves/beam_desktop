@@ -1,5 +1,4 @@
 import datetime
-import csv
 import json
 import os
 import tkinter as tk
@@ -12,7 +11,7 @@ from beam_calculations import (
     STEEL_SECTIONS,
     UniformLoad,
     calculate,
-    build_results_table,
+    write_results_csv,
     design_from_dict,
     design_to_dict,
     find_lightest_passing,
@@ -126,7 +125,7 @@ class BeamDesignerApp(tk.Tk):
         self.beam_canvas = self._canvas_card(right_content, "Beam", "Loading diagram", 170)
         self.shear_canvas = self._canvas_card(right_content, "Shear", "kips", 155)
         self.moment_canvas = self._canvas_card(right_content, "Moment", "kip-ft", 155)
-        self.deflection_canvas = self._canvas_card(right_content, "Deflection", "in", 155)
+        self.deflection_canvas = self._canvas_card(right_content, "Deflection", "in (+ down)", 155)
 
         checks = tk.Frame(right_content, bg="#f6f8fb")
         checks.pack(fill="x", padx=14, pady=(0, 10))
@@ -175,14 +174,27 @@ class BeamDesignerApp(tk.Tk):
         tk.Label(card, text=title, bg="#ffffff", fg="#172033",
                  font=("TkDefaultFont", 12, "bold")).pack(anchor="w", padx=14, pady=(10, 2))
         value = tk.StringVar(value="--")
+        allowable = tk.StringVar(value="Allowable: --")
+        utilization = tk.StringVar(value="Utilization: --")
         status = tk.StringVar(value="NOT CALCULATED")
         tk.Label(card, textvariable=value, bg="#ffffff", fg="#172033",
-                 font=("TkDefaultFont", 18, "bold")).pack(anchor="w", padx=14)
+                 font=("TkDefaultFont", 15, "bold")).pack(anchor="w", padx=14)
+        tk.Label(card, textvariable=allowable, bg="#ffffff", fg="#667085",
+                 font=("TkDefaultFont", 9)).pack(anchor="w", padx=14, pady=(0, 2))
+        tk.Label(card, textvariable=utilization, bg="#ffffff", fg="#667085",
+                 font=("TkDefaultFont", 9)).pack(anchor="w", padx=14)
+        bar = tk.Canvas(card, height=8, bg="#e8edf4", highlightthickness=0)
+        bar.pack(fill="x", padx=14, pady=(5, 0))
+        bar.bind("<Configure>", lambda _event, target=bar: self._draw_utilization_bar(target))
         status_label = tk.Label(card, textvariable=status, bg="#ffffff", fg="#667085")
-        status_label.pack(anchor="w", padx=14, pady=(2, 10))
+        status_label.pack(anchor="w", padx=14, pady=(3, 10))
         card.value = value
+        card.allowable = allowable
+        card.utilization = utilization
         card.status = status
         card.status_label = status_label
+        card.bar = bar
+        card.ratio = 0.0
         return card
 
     def _build_input_panel(self, parent):
@@ -573,7 +585,7 @@ class BeamDesignerApp(tk.Tk):
             xs = [i * model.span_ft / 240 for i in range(241)]
             values = [result["deflection"]["at"](x * 12) for x in xs]
             scale = max(0.001, max(abs(v) for v in values))
-            get_y = lambda v: baseline - v / scale * (height * 0.38)
+            get_y = lambda v: baseline + v / scale * (height * 0.38)
             label = "in"
 
         canvas.create_line(left, baseline, right, baseline, fill="#cbd5e1")
@@ -605,16 +617,32 @@ class BeamDesignerApp(tk.Tk):
         bending = result["bending"]
         bending_ratio = bending["actual"] / bending["allowable"]
         self.bending_card.value.set(f"{bending['actual']:.2f} ksi")
+        self.bending_card.allowable.set(f"Allowable: {bending['allowable']:.2f} ksi")
+        self.bending_card.utilization.set(f"Utilization: {bending_ratio * 100:.1f}%")
         self._set_status(self.bending_card, bending["pass"], bending_ratio)
 
         deflection = result["deflection_check"]
         deflection_ratio = deflection["actual"] / deflection["allowable"]
         self.deflection_card.value.set(f"{deflection['actual']:.3f} in")
+        self.deflection_card.allowable.set(f"Allowable: {deflection['allowable']:.3f} in")
+        self.deflection_card.utilization.set(f"Utilization: {deflection_ratio * 100:.1f}%")
         self._set_status(self.deflection_card, deflection["pass"], deflection_ratio)
 
     def _set_status(self, card, passed, ratio):
+        card.ratio = ratio
         card.status.set("PASS" if passed else "FAIL")
         card.status_label.configure(fg="#166534" if passed else "#b91c1c")
+        self._draw_utilization_bar(card.bar)
+
+    def _draw_utilization_bar(self, bar):
+        bar.delete("all")
+        width = bar.winfo_width()
+        if width <= 1:
+            return
+        ratio = bar.master.ratio
+        color = "#22c55e" if ratio < 0.7 else "#f59e0b" if ratio <= 1.0 else "#ef4444"
+        bar.create_rectangle(0, 0, width, 8, fill="#e8edf4", outline="")
+        bar.create_rectangle(0, 0, min(width, width * ratio), 8, fill=color, outline="")
 
     def _start_point_drag(self, event):
         if not hasattr(self, "last_model") or not self.last_model.point_loads:
@@ -728,9 +756,14 @@ class BeamDesignerApp(tk.Tk):
             self.hover_window.destroy()
             self.hover_window = None
 
+    def _flush_pending_redraw(self):
+        if self._redraw_job is not None:
+            self.after_cancel(self._redraw_job)
+            self._redraw_job = None
+        self.redraw()
+
     def export_results(self):
-        if not hasattr(self, "last_model") or not hasattr(self, "last_result"):
-            self.redraw()
+        self._flush_pending_redraw()
         path = filedialog.asksaveasfilename(
             title="Export Beam Results",
             defaultextension=".csv",
@@ -740,23 +773,8 @@ class BeamDesignerApp(tk.Tk):
         if not path:
             return
         try:
-            rows = build_results_table(self.last_model, self.last_result)
-            columns = [
-                "Position x (ft)",
-                "Shear V (kips)",
-                "Moment M (kip-ft)",
-                "Deflection (in)",
-            ]
             with open(path, "w", encoding="utf-8-sig", newline="") as output:
-                writer = csv.writer(output, lineterminator="\r\n")
-                writer.writerow(columns)
-                for row in rows:
-                    writer.writerow([
-                        f"{row['Position x (ft)']:.4f}",
-                        f"{row['Shear V (kips)']:.12g}",
-                        f"{row['Moment M (kip-ft)']:.12g}",
-                        f"{row['Deflection (in)']:.12g}",
-                    ])
+                write_results_csv(output, self.last_model, self.last_result)
         except (OSError, ValueError, tk.TclError) as exc:
             messagebox.showerror("Could Not Export Results",
                                  f"The results could not be exported:\n{exc}")
@@ -832,8 +850,7 @@ class BeamDesignerApp(tk.Tk):
         self.schedule_redraw(10)
 
     def save_pdf(self):
-        if not hasattr(self, "last_model"):
-            self.redraw()
+        self._flush_pending_redraw()
         path = filedialog.asksaveasfilename(
             defaultextension=".pdf",
             filetypes=[("PDF report", "*.pdf")],
@@ -892,8 +909,8 @@ class BeamDesignerApp(tk.Tk):
         text(500, 756, datetime.datetime.now().strftime("%Y-%m-%d"),
              "F2", 8, "1 1 1")
 
-        rect(36, 690, 264, 48)
-        rect(312, 690, 264, 48)
+        rect(36, 680, 264, 58)
+        rect(312, 680, 264, 58)
         text(48, 724, "BEAM INPUTS", "F1", 9, "0.12 0.31 0.70")
         support_name = "Simply supported" if model.support == "simply-supported" else "Cantilever"
         text(48, 708, f"Support: {support_name}", "F2", 8)
@@ -904,18 +921,26 @@ class BeamDesignerApp(tk.Tk):
         text(324, 696,
              f"Ix: {section['Ix']:.2f} in^4   Sx: {section['Sx']:.2f} in^3",
              "F2", 8)
+        modulus = 29000 if model.material == "steel" else 1600
+        allowable_stress = 30.0 if model.material == "steel" else 0.9
+        text(324, 684, f"E: {modulus:,} ksi   Fb: {allowable_stress:.3f} ksi",
+             "F2", 8)
 
-        rect(36, 640, 540, 38)
+        rect(36, 630, 540, 48)
         text(48, 664, "APPLIED LOADS", "F1", 9, "0.12 0.31 0.70")
-        point_lines = point_text.split("\n")
-        uniform_lines = uniform_text.split("\n")
-        text(48, 650, point_lines[0], "F2", 7)
-        if len(point_lines) > 1:
-            text(48, 642, point_lines[1], "F2", 7)
-        text(324, 650, uniform_lines[0], "F2", 7)
-        if len(uniform_lines) > 1:
-            text(324, 642, uniform_lines[1], "F2", 7)
-        text(324, 658, f"Self-weight: {self_weight_text}", "F2", 7)
+        point_lines = [
+            f"Point: {load.magnitude:.2f} k at {load.position_ft:.2f} ft"
+            for load in model.point_loads
+        ]
+        uniform_lines = [
+            f"Uniform: {load.magnitude:.3f} k/ft, {load.start_ft:.2f}-{load.end_ft:.2f} ft"
+            for load in model.uniform_loads
+        ]
+        text(48, 650, point_lines[0] if point_lines else "Point loads: None", "F2", 7)
+        text(324, 650, uniform_lines[0] if uniform_lines else "Uniform loads: None", "F2", 7)
+        text(48, 638, f"Steel self-weight: {self_weight_text}", "F2", 7)
+        if len(point_lines) > 1 or len(uniform_lines) > 1:
+            text(324, 638, "Additional loads on following schedule pages", "F2", 7)
 
         # Beam loading diagram
         rect(36, 548, 540, 78)
@@ -941,20 +966,28 @@ class BeamDesignerApp(tk.Tk):
             x = px(load.position_ft)
             line(x, beam_y + 35, x, beam_y + 5, 1.2, "0.12 0.31 0.70")
             commands.append(
-                f"0.12 0.31 0.70 RG 1.2 w {x:.1f} {beam_y+5:.1f} m "
+                f"0.12 0.31 0.70 rg 0.12 0.31 0.70 RG 1.2 w {x:.1f} {beam_y+5:.1f} m "
                 f"{x-4:.1f} {beam_y+11:.1f} l {x+4:.1f} {beam_y+11:.1f} l h f"
             )
-            text(x-16, beam_y + 39, f"{load.magnitude:.2f} k", "F2", 6)
         for load in model.uniform_loads:
             a, b = px(load.start_ft), px(load.end_ft)
             count = max(3, min(14, int(abs(b-a)/24)))
             for i in range(count + 1):
                 x = a + (b-a)*i/count
                 line(x, beam_y+28, x, beam_y+5, 0.8, "0.12 0.31 0.70")
-            text((a+b)/2-20, beam_y+31, f"{load.magnitude:.2f} k/ft", "F2", 6)
-        text(left-5, beam_y-38, "0 ft", "F2", 7)
-        text(right-24, beam_y-38, f"{model.span_ft:.2f} ft", "F2", 7)
-
+                commands.append(
+                    f"0.12 0.31 0.70 rg {x-2.2:.1f} {beam_y+9:.1f} m "
+                    f"{x+2.2:.1f} {beam_y+9:.1f} l {x:.1f} {beam_y+5:.1f} l h f"
+                )
+        if model.include_self_weight and model.material == "steel":
+            count = 14
+            for i in range(count + 1):
+                x = left + (right-left)*i/count
+                line(x, beam_y+18, x, beam_y+5, 0.7, "0.30 0.38 0.49")
+                commands.append(
+                    f"0.30 0.38 0.49 rg {x-2:.1f} {beam_y+9:.1f} m "
+                    f"{x+2:.1f} {beam_y+9:.1f} l {x:.1f} {beam_y+5:.1f} l h f"
+                )
         if model.support == "simply-supported":
             text(left-4, beam_y-25, f"RL {result['reactions']['left']:.2f} k", "F1", 7)
             text(right-40, beam_y-25, f"RR {result['reactions']['right']:.2f} k", "F1", 7)
@@ -982,22 +1015,26 @@ class BeamDesignerApp(tk.Tk):
             else:
                 values = [result["deflection"]["at"](x*12) for x in xs]
                 scale = max(0.001, max(abs(v) for v in values))
-                unit = "in"
+                unit = "in (+ down)"
 
             for i in range(len(xs)-1):
                 x1 = dleft + xs[i]/model.span_ft*(dright-dleft)
                 x2 = dleft + xs[i+1]/model.span_ft*(dright-dleft)
-                y1 = base - values[i]/scale*28
-                y2 = base - values[i+1]/scale*28
+                y1 = base - values[i]/scale*24
+                y2 = base - values[i+1]/scale*24
+                if kind != "deflection":
+                    y1 = base + values[i]/scale*24
+                    y2 = base + values[i+1]/scale*24
                 line(x1, y1, x2, y2, 1.2, "0.12 0.31 0.70")
-            text(dleft, y+48, unit, "F2", 6)
+            unit_x = dright - (58 if kind == "deflection" else 34)
+            text(unit_x, y+48, unit, "F2", 6, "0.40 0.46 0.53")
 
         diagram("SHEAR DIAGRAM", 482, "shear")
         diagram("MOMENT DIAGRAM", 404, "moment")
         diagram("DEFLECTION DIAGRAM", 326, "deflection")
 
-        rect(36, 242, 264, 66)
-        rect(312, 242, 264, 66)
+        rect(36, 234, 264, 74)
+        rect(312, 234, 264, 74)
         bending_ratio = result["bending"]["actual"]/result["bending"]["allowable"]
         deflection_ratio = (
             result["deflection_check"]["actual"]/result["deflection_check"]["allowable"]
@@ -1013,6 +1050,14 @@ class BeamDesignerApp(tk.Tk):
              f"Utilization: {bending_ratio*100:.1f}%   "
              f"{'PASS' if result['bending']['pass'] else 'FAIL'}",
              "F1", 8)
+        bending_bar_color = (
+            "0.13 0.77 0.35" if bending_ratio < 0.7 else
+            "0.96 0.62 0.04" if bending_ratio <= 1.0 else
+            "0.94 0.27 0.27"
+        )
+        rect(48, 239, 232, 7, "0.91 0.93 0.96", "0.91 0.93 0.96")
+        rect(48, 239, min(232, 232*bending_ratio), 7,
+             bending_bar_color, bending_bar_color)
         text(324, 294, "DEFLECTION CHECK", "F1", 9, "0.12 0.31 0.70")
         text(324, 278,
              f"Actual: {result['deflection_check']['actual']:.3f} in",
@@ -1024,6 +1069,14 @@ class BeamDesignerApp(tk.Tk):
              f"Utilization: {deflection_ratio*100:.1f}%   "
              f"{'PASS' if result['deflection_check']['pass'] else 'FAIL'}",
              "F1", 8)
+        deflection_bar_color = (
+            "0.13 0.77 0.35" if deflection_ratio < 0.7 else
+            "0.96 0.62 0.04" if deflection_ratio <= 1.0 else
+            "0.94 0.27 0.27"
+        )
+        rect(324, 239, 232, 7, "0.91 0.93 0.96", "0.91 0.93 0.96")
+        rect(324, 239, min(232, 232*deflection_ratio), 7,
+             deflection_bar_color, deflection_bar_color)
 
         rect(36, 174, 540, 54)
         text(48, 212, "MAXIMUM CALCULATED VALUES", "F1", 9, "0.12 0.31 0.70")
@@ -1044,34 +1097,85 @@ class BeamDesignerApp(tk.Tk):
              f"Lightest passing section: {recommendation or 'No section passes'}",
              "F1", 8)
 
-        rect(36, 72, 540, 88)
-        text(48, 142, "LOADS AND REACTION SUMMARY", "F1", 9, "0.12 0.31 0.70")
-        for index, line_value in enumerate(point_text.split("\n")[:3]):
-            text(48, 126-index*10, line_value, "F2", 7)
-        for index, line_value in enumerate(uniform_text.split("\n")[:3]):
-            text(324, 126-index*10, line_value, "F2", 7)
-        text(48, 84,
-             f"Reactions: Left {result['reactions']['left']:.2f} k"
-             f"   Right {result['reactions']['right']:.2f} k"
-             f"   Fixed moment {result['reactions']['moment']/12:.2f} kip-ft",
-             "F2", 7)
+        rect(36, 102, 540, 60)
+        text(48, 144, "SIGN CONVENTION", "F1", 9, "0.12 0.31 0.70")
+        text(48, 128,
+             "Downward loads and deflection are positive; sagging moment is positive.",
+             "F2", 8)
+        text(48, 114,
+             "Reactions and fixed-end moment are identified at the beam supports above.",
+             "F2", 8)
 
-        line(36, 58, 576, 58, 0.7, "0.40 0.46 0.53")
-        text(36, 42,
+        line(36, 82, 576, 82, 0.7, "0.40 0.46 0.53")
+        text(36, 64,
              "Educational use only. Verify calculations with a qualified engineer.",
              "F1", 7, "0.40 0.46 0.53")
 
         stream = ("\n".join(commands) + "\n").encode("latin-1", "replace")
 
+        schedule_lines = (
+            [f"Point load: {line_value}" for line_value in point_lines[1:]]
+            + [f"Uniform load: {line_value}" for line_value in uniform_lines[1:]]
+        )
+        schedule_pages = []
+        for offset in range(0, len(schedule_lines), 45):
+            page_commands = []
+
+            def schedule_text(x, y, value, font="F2", size=9, rgb="0.10 0.14 0.20"):
+                page_commands.append(
+                    f"BT /{font} {size} Tf {rgb} rg 1 0 0 1 {x:.1f} {y:.1f} Tm "
+                    f"({escape(value)}) Tj ET"
+                )
+
+            page_commands.append("0.12 0.31 0.70 rg 36 748 540 26 re f")
+            schedule_text(48, 756, "BEAM DESIGNER - APPLIED LOAD SCHEDULE",
+                          "F1", 12, "1 1 1")
+            schedule_text(48, 724,
+                          f"{model.material.title()} {model.section_name} - "
+                          f"{model.span_ft:.2f} ft span",
+                          "F1", 9, "0.12 0.31 0.70")
+            page_loads = schedule_lines[offset:offset+45]
+            y = 700
+            for index, value in enumerate(page_loads):
+                if index % 2 == 0:
+                    page_commands.append(
+                        f"0.95 0.97 0.99 rg 44 {y-4:.1f} 524 16 re f"
+                    )
+                schedule_text(52, y, value, "F2", 8)
+                y -= 14
+            page_commands.append("0.40 0.46 0.53 RG 0.7 w 36 48 m 576 48 l S")
+            schedule_text(36, 32,
+                          "Educational use only. Verify calculations with a qualified engineer.",
+                          "F2", 7, "0.40 0.46 0.53")
+            schedule_pages.append(
+                ("\n".join(page_commands) + "\n").encode("latin-1", "replace")
+            )
+
         objects = []
         objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
-        objects.append(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+        extra_page_ids = [7 + 2 * index for index in range(len(schedule_pages))]
+        kids = " ".join(["3 0 R"] + [f"{page_id} 0 R" for page_id in extra_page_ids])
+        objects.append(
+            f"<< /Type /Pages /Kids [{kids}] /Count {1+len(schedule_pages)} >>".encode("ascii")
+        )
         objects.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
                        b"/Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>")
         objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
         objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
         objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") +
                        stream + b"endstream")
+        for index, page_stream in enumerate(schedule_pages):
+            page_id = 7 + 2 * index
+            content_id = page_id + 1
+            objects.append(
+                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                f"/Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> "
+                f"/Contents {content_id} 0 R >>".encode("ascii")
+            )
+            objects.append(
+                f"<< /Length {len(page_stream)} >>\nstream\n".encode("ascii")
+                + page_stream + b"endstream"
+            )
 
         pdf = bytearray(b"%PDF-1.4\n")
         offsets = [0]

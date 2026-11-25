@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+import csv
 import math
+from dataclasses import dataclass
 from math import fsum
 from typing import Iterable, Sequence
 
@@ -317,12 +318,8 @@ def calculate(model: BeamModel) -> dict:
     prev_slope = 0.0
     while x < L:
         next_x = min(x + deflection_step, L)
-        if model.support == "cantilever":
-            curvature_left = -moment_at(x) / EI
-            curvature_right = -moment_at(next_x) / EI
-        else:
-            curvature_left = moment_at(x) / EI
-            curvature_right = moment_at(next_x) / EI
+        curvature_left = -moment_at(x) / EI
+        curvature_right = -moment_at(next_x) / EI
         next_slope = prev_slope + (curvature_left + curvature_right) * (next_x - x) / 2.0
         next_y = prev_y + (prev_slope + next_slope) * (next_x - x) / 2.0
         raw_points.append((next_x, next_y, next_slope))
@@ -525,3 +522,16 @@ def build_results_table(model: BeamModel, result: dict) -> list:
         key = round(row["Position x (ft)"], 7)
         unique[key] = row
     return [unique[key] for key in sorted(unique)]
+
+
+def write_results_csv(output, model: BeamModel, result: dict) -> None:
+    columns = [
+        "Position x (ft)",
+        "Shear V (kips)",
+        "Moment M (kip-ft)",
+        "Deflection (in)",
+    ]
+    writer = csv.writer(output, lineterminator="\r\n")
+    writer.writerow(columns)
+    for row in build_results_table(model, result):
+        writer.writerow(f"{row[column]:.15g}" for column in columns)

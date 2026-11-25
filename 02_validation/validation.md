@@ -5,7 +5,8 @@
 These values were produced directly by `beam_calculations.calculate` with the
 same models used by the Tkinter application. Internal moments are in kip-in
 and deflections use kip-in unit consistency; table values below convert moments
-to kip-ft by dividing by 12.
+to kip-ft by dividing by 12. Downward deflection is positive in calculation,
+desktop, CSV, and PDF output.
 
 ## Expected versus actual
 

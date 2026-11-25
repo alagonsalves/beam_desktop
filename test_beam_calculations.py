@@ -1,6 +1,8 @@
 import unittest
 import tempfile
 import os
+import csv
+import io
 from types import SimpleNamespace
 
 from beam_calculations import (
@@ -9,6 +11,7 @@ from beam_calculations import (
     UniformLoad,
     calculate,
     build_results_table,
+    write_results_csv,
     design_from_dict,
     design_to_dict,
     normalize_span,
@@ -29,6 +32,7 @@ class BeamCalculationValidationTests(unittest.TestCase):
         self.assertAlmostEqual(result["moment"]["location"], 120.0, places=1)
         self.assertAlmostEqual(result["bending"]["actual"], 17.96, delta=0.01)
         self.assertAlmostEqual(result["deflection"]["max"], 0.609, delta=0.001)
+        self.assertGreater(result["deflection"]["at"](120.0), 0.0)
 
     def test_off_center_point_load(self):
         model = BeamModel(
@@ -53,6 +57,7 @@ class BeamCalculationValidationTests(unittest.TestCase):
         self.assertAlmostEqual(result["reactions"]["moment"], 600.0, places=2)
         self.assertAlmostEqual(result["deflection"]["location"] / 12, 10.0, places=2)
         self.assertAlmostEqual(result["deflection"]["max"], 0.487, delta=0.001)
+        self.assertGreater(result["deflection"]["at"](120.0), 0.0)
         self.assertFalse(result["deflection_check"]["pass"])
 
     def test_lumber_uniform_load(self):
@@ -188,8 +193,32 @@ class BeamCalculationValidationTests(unittest.TestCase):
         self.assertIn(5.125, positions)
         self.assertIn(2.5, positions)
         self.assertIn(17.75, positions)
+        load_row = next(row for row in rows if row["Position x (ft)"] == 5.125)
+        self.assertGreater(load_row["Deflection (in)"], 0.0)
         for left, right in zip(positions, positions[1:]):
             self.assertLessEqual(right - left, 0.2500001)
+
+    def test_csv_export_matches_downward_positive_results(self):
+        model = BeamModel(
+            span_ft=10,
+            support="cantilever",
+            point_loads=(PointLoad(5.0, 10.0),),
+        )
+        result = calculate(model)
+        output = io.StringIO(newline="")
+        write_results_csv(output, model, result)
+        rows = list(csv.DictReader(io.StringIO(output.getvalue())))
+        self.assertEqual(
+            list(rows[0]),
+            ["Position x (ft)", "Shear V (kips)", "Moment M (kip-ft)", "Deflection (in)"],
+        )
+        free_end = next(row for row in rows if float(row["Position x (ft)"]) == 10.0)
+        self.assertGreater(float(free_end["Deflection (in)"]), 0.0)
+        self.assertAlmostEqual(
+            float(free_end["Deflection (in)"]),
+            result["deflection"]["at"](120.0),
+            places=12,
+        )
 
     def test_professional_pdf_report_is_generated(self):
         model = BeamModel(
@@ -209,9 +238,30 @@ class BeamCalculationValidationTests(unittest.TestCase):
                 pdf = report.read()
             self.assertTrue(pdf.startswith(b"%PDF-1.4"))
             self.assertIn(b"/MediaBox [0 0 612 792]", pdf)
+            self.assertIn(b"/Count 1", pdf)
             self.assertIn(b"BEAM DESIGNER", pdf)
             self.assertIn(b"BENDING CHECK", pdf)
+            self.assertIn(b"E: 29,000 ksi", pdf)
+            self.assertIn(b"Fb: 30.000 ksi", pdf)
             self.assertIn(b"Educational use only", pdf)
+
+    def test_pdf_load_schedule_adds_letter_pages_without_clipping(self):
+        model = BeamModel(
+            span_ft=20,
+            point_loads=tuple(PointLoad(0.1, index * 0.25) for index in range(50)),
+        )
+        fake_app = SimpleNamespace(
+            last_model=model,
+            last_result=calculate(model),
+            recommended_section="W8x10",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "many-loads.pdf")
+            BeamDesignerApp.write_pdf(fake_app, path)
+            with open(path, "rb") as report:
+                pdf = report.read()
+            self.assertIn(b"/Count 3", pdf)
+            self.assertIn(b"APPLIED LOAD SCHEDULE", pdf)
 
 
 if __name__ == "__main__":
