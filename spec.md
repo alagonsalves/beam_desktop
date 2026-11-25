@@ -19,6 +19,13 @@ floor beam or deck joist.
 ## Desktop Interface
 - Open in a native Tkinter window with an example already loaded: a 20 ft
   simply supported W12x26 with a 1 kip/ft uniform load over the full span.
+- Provide a File menu with Open and Save options. Open and Save use native
+  Tkinter file dialogs and JSON files.
+- Save support type, span, material, section, deflection limit, self-weight
+  setting, point loads, and uniform loads. Opening restores those inputs,
+  recalculates, and redraws immediately.
+- Report invalid or unreadable design files with a clear dialog and leave the
+  current design unchanged.
 - Use `ttk` themed controls for consistency on Windows, macOS, and Linux.
 - Place inputs in a left-hand panel and the beam, diagrams, and checks in a
   right-hand results area. Arrange panels vertically on narrow windows.
@@ -183,4 +190,3 @@ tolerances. Flag discrepancies rather than forcing results to match.
 - Lateral-torsional buckling
 - Load combinations
 - Continuous beams
-- Saving designs

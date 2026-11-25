@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 from math import fsum
 from typing import Iterable, Sequence
 
@@ -55,6 +56,135 @@ def section_by_name(material: str, name: str) -> dict:
         if section["name"] == name:
             return dict(section)
     raise ValueError("Unknown section: " + name)
+
+
+def design_to_dict(model: BeamModel) -> dict:
+    return {
+        "support": model.support,
+        "span_ft": model.span_ft,
+        "material": model.material,
+        "section": model.section_name,
+        "deflection_limit": model.deflection_limit,
+        "include_self_weight": model.include_self_weight,
+        "point_loads": [
+            {"magnitude": load.magnitude, "position_ft": load.position_ft}
+            for load in model.point_loads
+        ],
+        "uniform_loads": [
+            {
+                "magnitude": load.magnitude,
+                "start_ft": load.start_ft,
+                "end_ft": load.end_ft,
+            }
+            for load in model.uniform_loads
+        ],
+    }
+
+
+def design_from_dict(data: dict) -> BeamModel:
+    if not isinstance(data, dict):
+        raise ValueError("The design file must contain a JSON object.")
+
+    required = (
+        "support",
+        "span_ft",
+        "material",
+        "section",
+        "deflection_limit",
+        "include_self_weight",
+        "point_loads",
+        "uniform_loads",
+    )
+    missing = [key for key in required if key not in data]
+    if missing:
+        raise ValueError("Missing design fields: " + ", ".join(missing))
+
+    support = data["support"]
+    if support not in ("simply-supported", "cantilever"):
+        raise ValueError("Invalid support type.")
+
+    material = data["material"]
+    if material not in ("steel", "lumber"):
+        raise ValueError("Invalid material.")
+
+    section_name = data["section"]
+    try:
+        section_by_name(material, section_name)
+    except ValueError as exc:
+        raise ValueError("Invalid section for selected material.") from exc
+
+    try:
+        span_ft = float(data["span_ft"])
+        deflection_limit = int(data["deflection_limit"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid numeric or self-weight setting.") from exc
+    if isinstance(data["deflection_limit"], bool):
+        raise ValueError("Deflection limit must be 240 or 360.")
+    try:
+        deflection_limit_value = float(data["deflection_limit"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Deflection limit must be 240 or 360.") from exc
+    if not math.isfinite(span_ft) or not 4.0 <= span_ft <= 40.0:
+        raise ValueError("Span must be between 4 and 40 ft.")
+    if deflection_limit_value not in (240.0, 360.0):
+        raise ValueError("Deflection limit must be 240 or 360.")
+    deflection_limit = int(deflection_limit_value)
+    if not isinstance(data["include_self_weight"], bool):
+        raise ValueError("include_self_weight must be true or false.")
+    include_self_weight = data["include_self_weight"]
+    if material == "lumber":
+        include_self_weight = False
+
+    if not isinstance(data["point_loads"], list):
+        raise ValueError("Point loads must be a JSON list.")
+    point_loads = []
+    for load in data["point_loads"]:
+        if not isinstance(load, dict) or "magnitude" not in load or "position_ft" not in load:
+            raise ValueError("Invalid point load entry.")
+        try:
+            magnitude = float(load["magnitude"])
+            position_ft = float(load["position_ft"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid point load values.") from exc
+        if (not math.isfinite(magnitude) or not math.isfinite(position_ft)
+                or magnitude < 0 or not 0.0 <= position_ft <= span_ft):
+            raise ValueError("Point loads must use nonnegative magnitudes and valid positions.")
+        point_loads.append(PointLoad(magnitude, position_ft))
+
+    if not isinstance(data["uniform_loads"], list):
+        raise ValueError("Uniform loads must be a JSON list.")
+    uniform_loads = []
+    for load in data["uniform_loads"]:
+        if not isinstance(load, dict):
+            raise ValueError("Invalid uniform load entry.")
+        if not {"magnitude", "start_ft", "end_ft"} <= set(load):
+            raise ValueError("Uniform load entries require magnitude, start_ft, and end_ft.")
+        try:
+            magnitude = float(load["magnitude"])
+            start_ft = float(load["start_ft"])
+            end_ft = float(load["end_ft"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid uniform load values.") from exc
+        if not math.isfinite(magnitude) or not math.isfinite(start_ft) or not math.isfinite(end_ft):
+            raise ValueError("Uniform load values must be finite numbers.")
+        if magnitude < 0:
+            raise ValueError("Uniform load magnitudes must be nonnegative.")
+        start_ft = max(0.0, min(span_ft, start_ft))
+        end_ft = max(0.0, min(span_ft, end_ft))
+        if start_ft > end_ft:
+            start_ft, end_ft = end_ft, start_ft
+        uniform_loads.append(UniformLoad(magnitude, start_ft, end_ft))
+
+    return BeamModel(
+        support=support,
+        span_ft=span_ft,
+        point_loads=tuple(point_loads),
+        uniform_loads=tuple(uniform_loads),
+        material=material,
+        section_name=section_name,
+        include_self_weight=include_self_weight,
+        deflection_limit=deflection_limit,
+    )
 
 
 def calculate(model: BeamModel) -> dict:

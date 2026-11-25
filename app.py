@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -10,6 +11,8 @@ from beam_calculations import (
     STEEL_SECTIONS,
     UniformLoad,
     calculate,
+    design_from_dict,
+    design_to_dict,
     find_lightest_passing,
 )
 
@@ -18,6 +21,16 @@ class BeamDesignerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Beam Designer")
+        file_menu = tk.Menu(self, tearoff=False)
+        file_menu.add_command(label="Open...", accelerator="CmdOrCtrl+O",
+                              command=self.open_design)
+        file_menu.add_command(label="Save...", accelerator="CmdOrCtrl+S",
+                              command=self.save_design)
+        menu_bar = tk.Menu(self)
+        menu_bar.add_cascade(label="File", menu=file_menu)
+        self.config(menu=menu_bar)
+        self.bind_all("<Control-o>", lambda _event: self.open_design())
+        self.bind_all("<Control-s>", lambda _event: self.save_design())
         self.geometry("1180x820")
         self.minsize(760, 600)
         self.configure(bg="#f6f8fb")
@@ -667,6 +680,76 @@ class BeamDesignerApp(tk.Tk):
         if self.hover_window is not None and self.hover_window.winfo_exists():
             self.hover_window.destroy()
             self.hover_window = None
+
+    def save_design(self):
+        path = filedialog.asksaveasfilename(
+            title="Save Beam Design",
+            defaultextension=".json",
+            filetypes=[("Beam design JSON", "*.json"), ("All files", "*.*")],
+            initialfile="beam-design.json",
+        )
+        if not path:
+            return
+        try:
+            model = self.current_model()
+            design = design_to_dict(model)
+            with open(path, "w", encoding="utf-8") as output:
+                json.dump(design, output, indent=2)
+                output.write("\n")
+        except (OSError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Could Not Save Design",
+                                 f"The design could not be saved:\n{exc}")
+            return
+        messagebox.showinfo("Design Saved", f"Saved design to:\n{path}")
+
+    def open_design(self):
+        path = filedialog.askopenfilename(
+            title="Open Beam Design",
+            filetypes=[("Beam design JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as source:
+                data = json.load(source)
+            model = design_from_dict(data)
+        except json.JSONDecodeError as exc:
+            messagebox.showerror("Invalid Design File",
+                                 f"The file is not valid JSON:\n{exc}")
+            return
+        except (OSError, UnicodeDecodeError, ValueError, TypeError) as exc:
+            messagebox.showerror("Invalid Design File",
+                                 f"The design file could not be opened:\n{exc}")
+            return
+
+        self.support.set(model.support)
+        self.span.set(model.span_ft)
+        self.span_entry.delete(0, "end")
+        self.span_entry.insert(0, str(model.span_ft))
+        self.material.set(model.material)
+        self.section_name.set(model.section_name)
+        self.deflection_limit.set(model.deflection_limit)
+        self.self_weight.set(
+            model.include_self_weight if model.material == "steel" else False
+        )
+        self.point_loads = [
+            {
+                "magnitude": tk.DoubleVar(value=load.magnitude),
+                "position": tk.DoubleVar(value=load.position_ft),
+            }
+            for load in model.point_loads
+        ]
+        self.uniform_loads = [
+            {
+                "magnitude": tk.DoubleVar(value=load.magnitude),
+                "start": tk.DoubleVar(value=load.start_ft),
+                "end": tk.DoubleVar(value=load.end_ft),
+            }
+            for load in model.uniform_loads
+        ]
+        self.update_section_options()
+        self._refresh_load_cards()
+        self.schedule_redraw(10)
 
     def save_pdf(self):
         if not hasattr(self, "last_model"):

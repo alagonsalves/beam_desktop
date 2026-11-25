@@ -5,6 +5,8 @@ from beam_calculations import (
     PointLoad,
     UniformLoad,
     calculate,
+    design_from_dict,
+    design_to_dict,
 )
 
 
@@ -117,6 +119,46 @@ class BeamCalculationValidationTests(unittest.TestCase):
         self.assertAlmostEqual(result["moment"]["max"] / 12, 0.90, delta=0.01)
         self.assertAlmostEqual(result["bending"]["actual"], 0.505, delta=0.01)
         self.assertAlmostEqual(result["deflection"]["max"], 0.147, delta=0.001)
+
+    def test_design_json_round_trip(self):
+        model = BeamModel(
+            support="cantilever",
+            span_ft=18.25,
+            material="steel",
+            section_name="W16x26",
+            deflection_limit=240,
+            include_self_weight=True,
+            point_loads=(PointLoad(3.5, 12.25),),
+            uniform_loads=(UniformLoad(0.25, 2.0, 15.5),),
+        )
+        restored = design_from_dict(design_to_dict(model))
+        self.assertEqual(restored.support, model.support)
+        self.assertEqual(restored.span_ft, model.span_ft)
+        self.assertEqual(restored.section_name, model.section_name)
+        self.assertEqual(restored.deflection_limit, model.deflection_limit)
+        self.assertTrue(restored.include_self_weight)
+        self.assertEqual(restored.point_loads[0].position_ft, 12.25)
+        self.assertEqual(restored.uniform_loads[0].end_ft, 15.5)
+
+    def test_invalid_design_is_rejected(self):
+        invalid_designs = (
+            None,
+            {},
+            {"support": "invalid"},
+            {
+                "support": "simply-supported",
+                "span_ft": 20,
+                "material": "steel",
+                "section": "W12x26",
+                "deflection_limit": 360,
+                "include_self_weight": True,
+                "point_loads": [{"magnitude": -1, "position_ft": 5}],
+                "uniform_loads": [],
+            },
+        )
+        for data in invalid_designs:
+            with self.assertRaises(ValueError):
+                design_from_dict(data)
 
 
 if __name__ == "__main__":
