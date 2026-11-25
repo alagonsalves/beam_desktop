@@ -40,11 +40,20 @@ class BeamDesignerApp(tk.Tk):
         self.self_weight = tk.BooleanVar(value=False)
         self.point_loads = []
         self.uniform_loads = []
+        self._redraw_job = None
+        self._resize_job = None
+        self._hover_job = None
+        self._last_result_signature = None
+        self._result_cache = None
+        self._recommendation_signature = None
+        self._recommendation_cache = None
+        self._drag_point_index = None
+        self.hover_window = None
 
         self._build_ui()
         self.add_uniform_load(1.0, 0.0, 20.0)
         self.update_section_options()
-        self.bind("<Configure>", lambda _event: self.after_idle(self.redraw))
+        self.bind("<Configure>", lambda _event: self.schedule_resize())
 
     def _build_ui(self):
         header = tk.Frame(self, bg="#ffffff", height=68)
@@ -117,6 +126,9 @@ class BeamDesignerApp(tk.Tk):
                        self.moment_canvas, self.deflection_canvas):
             canvas.bind("<Motion>", self._hover_diagrams)
             canvas.bind("<Leave>", lambda _e: self._clear_hover())
+        self.beam_canvas.bind("<ButtonPress-1>", self._start_point_drag)
+        self.beam_canvas.bind("<B1-Motion>", self._drag_point_load)
+        self.beam_canvas.bind("<ButtonRelease-1>", self._finish_point_drag)
 
     def _card(self, parent):
         frame = tk.Frame(parent, bg="#ffffff", highlightthickness=1,
@@ -159,16 +171,16 @@ class BeamDesignerApp(tk.Tk):
         support = tk.Frame(setup, bg="#ffffff")
         support.pack(fill="x", pady=(4, 10))
         ttk.Radiobutton(support, text="Simply supported", value="simply-supported",
-                        variable=self.support, command=self.redraw).pack(side="left", padx=(0, 12))
+                        variable=self.support, command=lambda: self.schedule_redraw()).pack(side="left", padx=(0, 12))
         ttk.Radiobutton(support, text="Cantilever", value="cantilever",
-                        variable=self.support, command=self.redraw).pack(side="left")
+                        variable=self.support, command=lambda: self.schedule_redraw()).pack(side="left")
 
         tk.Label(setup, text="Span (ft)", bg="#ffffff", anchor="w").pack(fill="x")
         span_row = tk.Frame(setup, bg="#ffffff")
         span_row.pack(fill="x", pady=(4, 0))
         self.span_scale = tk.Scale(span_row, from_=4, to=40, resolution=0.25,
                                    orient="horizontal", variable=self.span,
-                                   command=lambda _v: self.redraw(),
+                                   command=lambda _v: self.schedule_redraw(25),
                                    bg="#ffffff", highlightthickness=0)
         self.span_scale.pack(side="left", fill="x", expand=True)
         self.span_entry = ttk.Entry(span_row, width=8)
@@ -198,11 +210,11 @@ class BeamDesignerApp(tk.Tk):
         tk.Label(section, text="Section", bg="#ffffff", anchor="w").pack(fill="x")
         self.section_combo = ttk.Combobox(section, textvariable=self.section_name, state="readonly")
         self.section_combo.pack(fill="x", pady=(4, 10))
-        self.section_combo.bind("<<ComboboxSelected>>", lambda _e: self.redraw())
+        self.section_combo.bind("<<ComboboxSelected>>", lambda _e: self.schedule_redraw())
 
         self.self_weight_check = ttk.Checkbutton(
             section, text="Include selected steel beam self-weight",
-            variable=self.self_weight, command=self.redraw
+            variable=self.self_weight, command=lambda: self.schedule_redraw()
         )
         self.self_weight_check.pack(anchor="w")
         self.self_weight_detail = tk.StringVar(value="")
@@ -211,9 +223,9 @@ class BeamDesignerApp(tk.Tk):
 
         limit = self._panel_section(parent, "Deflection Limit")
         ttk.Radiobutton(limit, text="L/240", value=240,
-                        variable=self.deflection_limit, command=self.redraw).pack(anchor="w")
+                        variable=self.deflection_limit, command=lambda: self.schedule_redraw()).pack(anchor="w")
         ttk.Radiobutton(limit, text="L/360", value=360,
-                        variable=self.deflection_limit, command=self.redraw).pack(anchor="w")
+                        variable=self.deflection_limit, command=lambda: self.schedule_redraw()).pack(anchor="w")
 
     def _panel_section(self, parent, title):
         frame = tk.Frame(parent, bg="#ffffff", highlightthickness=1,
@@ -229,7 +241,7 @@ class BeamDesignerApp(tk.Tk):
         try:
             value = max(4.0, min(40.0, float(self.span_entry.get())))
             self.span.set(value)
-            self.redraw()
+            self.schedule_redraw(40)
         except ValueError:
             pass
 
@@ -250,7 +262,7 @@ class BeamDesignerApp(tk.Tk):
                 self.section_name.set("2x8")
             self.self_weight_check.configure(state="disabled")
         self.section_combo.configure(values=names)
-        self.redraw()
+        self.schedule_redraw()
 
     def add_point_load(self, magnitude=1.0, position=None):
         if position is None:
@@ -299,7 +311,7 @@ class BeamDesignerApp(tk.Tk):
             self._load_entry(card, 1, 0, "Magnitude (kips/ft)", load["magnitude"])
             self._load_entry(card, 1, 1, "Start (ft)", load["start"])
             self._load_entry(card, 1, 2, "End (ft)", load["end"])
-        self.redraw()
+        self.schedule_redraw()
 
     def _load_entry(self, parent, row, column, label, variable):
         frame = tk.Frame(parent, bg="#fbfcfe")
@@ -307,7 +319,7 @@ class BeamDesignerApp(tk.Tk):
         tk.Label(frame, text=label, bg="#fbfcfe", fg="#667085", font=("TkDefaultFont", 9)).pack(anchor="w")
         entry = ttk.Entry(frame, textvariable=variable, width=10)
         entry.pack(fill="x")
-        entry.bind("<KeyRelease>", lambda _e: self.redraw())
+        entry.bind("<KeyRelease>", lambda _e: self.schedule_redraw(40))
 
     def _remove_load(self, load, kind):
         if kind == "point":
@@ -343,10 +355,50 @@ class BeamDesignerApp(tk.Tk):
             deflection_limit=self.deflection_limit.get(),
         )
 
+    def schedule_redraw(self, delay=35):
+        if self._redraw_job is not None:
+            self.after_cancel(self._redraw_job)
+        self._redraw_job = self.after(delay, self._run_scheduled_redraw)
+
+    def _run_scheduled_redraw(self):
+        self._redraw_job = None
+        self.redraw()
+
+    def schedule_resize(self, delay=80):
+        if self._resize_job is not None:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(delay, self._run_resize_redraw)
+
+    def _run_resize_redraw(self):
+        self._resize_job = None
+        if hasattr(self, "last_model") and hasattr(self, "last_result"):
+            self._draw_beam(self.last_model, self.last_result)
+            self._draw_diagram(self.shear_canvas, self.last_model, self.last_result, "shear")
+            self._draw_diagram(self.moment_canvas, self.last_model, self.last_result, "moment")
+            self._draw_diagram(self.deflection_canvas, self.last_model, self.last_result, "deflection")
+
+    def _model_signature(self, model):
+        return (
+            model.support,
+            model.span_ft,
+            tuple((p.magnitude, p.position_ft) for p in model.point_loads),
+            tuple((u.magnitude, u.start_ft, u.end_ft) for u in model.uniform_loads),
+            model.material,
+            model.section_name,
+            model.include_self_weight,
+            model.deflection_limit,
+        )
+
     def redraw(self):
         try:
             model = self.current_model()
-            result = calculate(model)
+            signature = self._model_signature(model)
+            if signature == self._last_result_signature:
+                result = self._result_cache
+            else:
+                result = calculate(model)
+                self._last_result_signature = signature
+                self._result_cache = result
         except (ValueError, tk.TclError):
             return
         self.last_model = model
@@ -446,20 +498,20 @@ class BeamDesignerApp(tk.Tk):
             return left + ft / span * (right - left)
 
         if kind == "shear":
-            values = [result["shear"]["at"](x) for x in range(0, int(model.span_ft * 12) + 1)]
-            xs = [x / 12 for x in range(0, int(model.span_ft * 12) + 1)]
+            xs = [i * model.span_ft / 240 for i in range(241)]
+            values = [result["shear"]["at"](x * 12) for x in xs]
             scale = max(1.0, max(abs(v) for v in values))
             get_y = lambda v: baseline - v / scale * (height * 0.38)
             label = "kips"
         elif kind == "moment":
-            values = [result["moment"]["at"](x) / 12 for x in range(0, int(model.span_ft * 12) + 1)]
-            xs = [x / 12 for x in range(0, int(model.span_ft * 12) + 1)]
+            xs = [i * model.span_ft / 240 for i in range(241)]
+            values = [result["moment"]["at"](x * 12) / 12 for x in xs]
             scale = max(1.0, max(abs(v) for v in values))
             get_y = lambda v: baseline - v / scale * (height * 0.38)
             label = "kip-ft"
         else:
-            values = [result["deflection"]["at"](x) for x in range(0, int(model.span_ft * 12) + 1)]
-            xs = [x / 12 for x in range(0, int(model.span_ft * 12) + 1)]
+            xs = [i * model.span_ft / 240 for i in range(241)]
+            values = [result["deflection"]["at"](x * 12) for x in xs]
             scale = max(0.001, max(abs(v) for v in values))
             get_y = lambda v: baseline - v / scale * (height * 0.38)
             label = "in"
@@ -504,8 +556,57 @@ class BeamDesignerApp(tk.Tk):
         card.status.set("PASS" if passed else "FAIL")
         card.status_label.configure(fg="#166534" if passed else "#b91c1c")
 
+    def _start_point_drag(self, event):
+        if not hasattr(self, "last_model") or not self.last_model.point_loads:
+            return
+        width = max(400, self.beam_canvas.winfo_width())
+        left, right = 50, width - 30
+        span = self.last_model.span_ft
+        nearest_index = None
+        nearest_distance = 24.0
+        for index, load in enumerate(self.last_model.point_loads):
+            load_x = left + load.position_ft / span * (right - left)
+            distance = abs(event.x - load_x)
+            if distance < nearest_distance:
+                nearest_distance = distance
+                nearest_index = index
+        self._drag_point_index = nearest_index
+
+    def _drag_point_load(self, event):
+        if self._drag_point_index is None or not hasattr(self, "last_model"):
+            return
+        width = max(400, self.beam_canvas.winfo_width())
+        left, right = 50, width - 30
+        span = self.last_model.span_ft
+        fraction = max(0.0, min(1.0, (event.x - left) / (right - left)))
+        position = round(fraction * span * 4.0) / 4.0
+        if self._drag_point_index < len(self.point_loads):
+            self.point_loads[self._drag_point_index]["position"].set(position)
+            self.schedule_redraw(20)
+
+    def _finish_point_drag(self, _event):
+        self._drag_point_index = None
+        if self._redraw_job is not None:
+            self.after_cancel(self._redraw_job)
+        self._redraw_job = None
+        self.redraw()
+
     def _update_recommendation(self, model):
-        recommended = find_lightest_passing(model)
+        signature = (
+            model.support,
+            model.span_ft,
+            tuple((p.magnitude, p.position_ft) for p in model.point_loads),
+            tuple((u.magnitude, u.start_ft, u.end_ft) for u in model.uniform_loads),
+            model.material,
+            model.include_self_weight,
+            model.deflection_limit,
+        )
+        if signature == self._recommendation_signature:
+            recommended = self._recommendation_cache
+        else:
+            recommended = find_lightest_passing(model)
+            self._recommendation_signature = signature
+            self._recommendation_cache = recommended
         if recommended:
             self.recommendation_text.set(
                 f"Lightest passing section: {recommended['name']} "
@@ -522,41 +623,50 @@ class BeamDesignerApp(tk.Tk):
             self.redraw()
 
     def _hover_diagrams(self, event):
-        canvas = event.widget
         if not hasattr(self, "last_model"):
             return
-        width = max(400, canvas.winfo_width())
-        left, right = 50, width - 30
-        ft = max(0.0, min(self.last_model.span_ft,
-                          (event.x - left) / (right - left) * self.last_model.span_ft))
-        x_in = ft * 12
-        shear = self.last_result["shear"]["at"](x_in)
-        moment = self.last_result["moment"]["at"](x_in) / 12
-        deflection = self.last_result["deflection"]["at"](x_in)
-        for target in (self.shear_canvas, self.moment_canvas, self.deflection_canvas):
-            target.delete("hover")
-            tx = left + ft / self.last_model.span_ft * (right - left)
-            target.create_line(tx, 8, tx, target.winfo_height() - 8,
-                               fill="#94a3b8", dash=(3, 3), tags=("hover",))
-        if hasattr(self, "hover_window"):
-            self.hover_window.destroy()
-        self.hover_window = tk.Toplevel(self)
-        self.hover_window.overrideredirect(True)
-        self.hover_window.configure(bg="#ffffff")
-        tk.Label(self.hover_window,
-                 text=f"{ft:.2f} ft\nV {shear:.2f} k\nM {moment:.2f} kip-ft\ny {deflection:.3f} in",
-                 bg="#ffffff", fg="#172033", justify="left",
-                 relief="solid", borderwidth=1,
-                 font=("TkDefaultFont", 9)).pack(padx=1, pady=1)
-        self.hover_window.geometry("+{}+{}".format(
-            self.winfo_rootx() + event.x_root - self.winfo_rootx(),
-            self.winfo_rooty() + event.y_root - self.winfo_rooty(),
-        ))
+        if self._hover_job is not None:
+            self.after_cancel(self._hover_job)
+
+        def update_hover():
+            self._hover_job = None
+            canvas = event.widget
+            width = max(400, canvas.winfo_width())
+            left, right = 50, width - 30
+            ft = max(0.0, min(self.last_model.span_ft,
+                              (event.x - left) / (right - left) * self.last_model.span_ft))
+            x_in = ft * 12
+            shear = self.last_result["shear"]["at"](x_in)
+            moment = self.last_result["moment"]["at"](x_in) / 12
+            deflection = self.last_result["deflection"]["at"](x_in)
+            for target in (self.shear_canvas, self.moment_canvas, self.deflection_canvas):
+                target.delete("hover")
+                tx = left + ft / self.last_model.span_ft * (right - left)
+                target.create_line(tx, 8, tx, target.winfo_height() - 8,
+                                   fill="#94a3b8", dash=(3, 3), tags=("hover",))
+            if self.hover_window is None or not self.hover_window.winfo_exists():
+                self.hover_window = tk.Toplevel(self)
+                self.hover_window.overrideredirect(True)
+                self.hover_window.configure(bg="#ffffff")
+                self.hover_label = tk.Label(
+                    self.hover_window, bg="#ffffff", fg="#172033", justify="left",
+                    relief="solid", borderwidth=1, font=("TkDefaultFont", 9)
+                )
+                self.hover_label.pack(padx=1, pady=1)
+            self.hover_label.configure(
+                text=f"{ft:.2f} ft\nV {shear:.2f} k\nM {moment:.2f} kip-ft\ny {deflection:.3f} in"
+            )
+            self.hover_window.geometry(f"+{event.x_root + 12}+{event.y_root + 12}")
+
+        self._hover_job = self.after(20, update_hover)
 
     def _clear_hover(self):
-        if hasattr(self, "hover_window"):
+        if self._hover_job is not None:
+            self.after_cancel(self._hover_job)
+            self._hover_job = None
+        if self.hover_window is not None and self.hover_window.winfo_exists():
             self.hover_window.destroy()
-            delattr(self, "hover_window")
+            self.hover_window = None
 
     def save_pdf(self):
         if not hasattr(self, "last_model"):
