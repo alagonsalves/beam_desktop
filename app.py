@@ -483,7 +483,7 @@ class BeamDesignerApp(tk.Tk):
                                text=f"R {result['reactions']['left']:.2f} k",
                                fill="#166534", font=("TkDefaultFont", 9, "bold"))
             canvas.create_text(left + 100, y + 42,
-                               text=f"M_fixed {result['reactions']['moment']:.2f} kip-ft",
+                               text=f"M_fixed {result['reactions']['moment'] / 12:.2f} kip-ft",
                                fill="#166534", font=("TkDefaultFont", 9, "bold"))
 
     def _draw_diagram(self, canvas, model, result, kind):
