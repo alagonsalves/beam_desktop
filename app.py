@@ -851,72 +851,224 @@ class BeamDesignerApp(tk.Tk):
         model = self.last_model
         result = self.last_result
         section = result["section"]
-        point_text = ", ".join(
-            f"{load.magnitude:.2f} k at {load.position_ft:.2f} ft"
+        point_text = "\n".join(
+            f"  Point: {load.magnitude:.2f} k at {load.position_ft:.2f} ft"
             for load in model.point_loads
-        ) or "None"
-        uniform_text = ", ".join(
-            f"{load.magnitude:.3f} k/ft from {load.start_ft:.2f} to {load.end_ft:.2f} ft"
+        ) or "  Point loads: None"
+        uniform_text = "\n".join(
+            f"  Uniform: {load.magnitude:.3f} k/ft, {load.start_ft:.2f} to {load.end_ft:.2f} ft"
             for load in model.uniform_loads
-        ) or "None"
-        self_weight_text = "Off"
+        ) or "  Uniform loads: None"
+        self_weight_text = "OFF"
         if model.include_self_weight:
-            self_weight_text = f"On: {section['weight'] / 1000:.3f} kips/ft"
-        lines = [
-            "Beam Designer",
-            datetime.datetime.now().strftime("Generated %Y-%m-%d %H:%M"),
-            f"Support: {model.support}",
-            f"Span: {model.span_ft:.2f} ft",
-            f"Deflection limit: L/{model.deflection_limit}",
-            f"Material: {model.material}",
-            f"Section: {model.section_name}",
-            f"Ix: {section['Ix']:.2f} in^4  Sx: {section['Sx']:.2f} in^3",
-            f"Point loads: {point_text}",
-            f"Uniform loads: {uniform_text}",
-            f"Steel self-weight: {self_weight_text}",
-            f"Reactions: left {result['reactions']['left']:.2f} k",
-            f"Right {result['reactions']['right']:.2f} k",
-            f"Bending: {result['bending']['actual']:.2f} ksi actual; "
-            f"{result['bending']['allowable']:.2f} ksi allowable",
-            f"Deflection: {result['deflection']['max']:.3f} in actual; "
-            f"{result['deflection_check']['allowable']:.3f} in allowable",
-            f"Shear maximum: {result['shear']['max']:.2f} k at "
-            f"{result['shear']['location'] / 12:.2f} ft",
-            f"Moment maximum: {result['moment']['max'] / 12:.2f} kip-ft at "
-            f"{result['moment']['location'] / 12:.2f} ft",
-            f"Deflection maximum: {result['deflection']['max']:.3f} in at "
-            f"{result['deflection']['location'] / 12:.2f} ft",
-            f"Bending check: {'PASS' if result['bending']['pass'] else 'FAIL'}",
-            f"Deflection check: {'PASS' if result['deflection_check']['pass'] else 'FAIL'}",
-            f"Recommendation: {getattr(self, 'recommended_section', 'None') or 'No passing section'}",
-            "Educational use only. Verify calculations with a qualified engineer.",
-        ]
-        width, height = 612, 792
-        commands = [
-            "BT",
-            "/F1 16 Tf",
-            "72 738 Td",
-            "(Beam Designer) Tj",
-            "/F1 9 Tf",
-            "0 -22 Td",
-        ]
-        for line in lines[1:]:
-            safe = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-            commands.extend([f"({safe}) Tj", "0 -16 Td"])
-        commands.append("ET")
-        commands.extend([
-            "0.2 0.35 0.75 rg",
-            "72 190 m 540 190 l 72 150 m 540 150 l 72 110 m 540 110 l 72 70 m 540 70 l S",
-            "0.15 0.30 0.75 RG",
-            "72 190 m 306 190 l 540 190 l S",
-        ])
+            self_weight_text = (
+                f"ON - {section['weight'] / 1000:.3f} kips/ft"
+            )
+
+        def escape(text):
+            return str(text).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+        def text(x, y, value, font="F2", size=8, rgb="0.10 0.14 0.20"):
+            commands.append(
+                f"BT /{font} {size} Tf {rgb} rg 1 0 0 1 {x:.1f} {y:.1f} Tm "
+                f"({escape(value)}) Tj ET"
+            )
+
+        def rect(x, y, width, height, fill="1 1 1", stroke="0.78 0.82 0.86"):
+            commands.append(
+                f"{fill} rg {stroke} RG {x:.1f} {y:.1f} {width:.1f} {height:.1f} re B"
+            )
+
+        def line(x1, y1, x2, y2, width=1, rgb="0.50 0.56 0.63"):
+            commands.append(
+                f"{rgb} RG {width:.1f} w {x1:.1f} {y1:.1f} m "
+                f"{x2:.1f} {y2:.1f} l S"
+            )
+
+        commands = []
+        rect(36, 748, 540, 26, "0.12 0.31 0.70", "0.12 0.31 0.70")
+        text(48, 756, "BEAM DESIGNER - ENGINEERING CALCULATION SHEET",
+             "F1", 13, "1 1 1")
+        text(500, 756, datetime.datetime.now().strftime("%Y-%m-%d"),
+             "F2", 8, "1 1 1")
+
+        rect(36, 690, 264, 48)
+        rect(312, 690, 264, 48)
+        text(48, 724, "BEAM INPUTS", "F1", 9, "0.12 0.31 0.70")
+        support_name = "Simply supported" if model.support == "simply-supported" else "Cantilever"
+        text(48, 708, f"Support: {support_name}", "F2", 8)
+        text(48, 696, f"Span: {model.span_ft:.2f} ft    Limit: L/{model.deflection_limit}",
+             "F2", 8)
+        text(324, 724, "SECTION PROPERTIES", "F1", 9, "0.12 0.31 0.70")
+        text(324, 708, f"{model.material.title()} - {model.section_name}", "F2", 8)
+        text(324, 696,
+             f"Ix: {section['Ix']:.2f} in^4   Sx: {section['Sx']:.2f} in^3",
+             "F2", 8)
+
+        rect(36, 640, 540, 38)
+        text(48, 664, "APPLIED LOADS", "F1", 9, "0.12 0.31 0.70")
+        point_lines = point_text.split("\n")
+        uniform_lines = uniform_text.split("\n")
+        text(48, 650, point_lines[0], "F2", 7)
+        if len(point_lines) > 1:
+            text(48, 642, point_lines[1], "F2", 7)
+        text(324, 650, uniform_lines[0], "F2", 7)
+        if len(uniform_lines) > 1:
+            text(324, 642, uniform_lines[1], "F2", 7)
+        text(324, 658, f"Self-weight: {self_weight_text}", "F2", 7)
+
+        # Beam loading diagram
+        rect(36, 548, 540, 78)
+        text(48, 614, "BEAM LOADING DIAGRAM", "F1", 9, "0.12 0.31 0.70")
+        left, right, beam_y = 72, 540, 575
+        line(left, beam_y, right, beam_y, 5, "0.20 0.25 0.31")
+        if model.support == "simply-supported":
+            commands.append(
+                f"0.58 0.64 0.72 rg {left-12:.1f} {beam_y-12:.1f} m "
+                f"{left+12:.1f} {beam_y-12:.1f} l {left:.1f} {beam_y:.1f} l h f"
+            )
+            commands.append(
+                f"0.58 0.64 0.72 rg {right-12:.1f} {beam_y-12:.1f} m "
+                f"{right+12:.1f} {beam_y-12:.1f} l {right:.1f} {beam_y:.1f} l h f"
+            )
+        else:
+            rect(left-10, beam_y-28, 10, 56, "0.58 0.64 0.72", "0.58 0.64 0.72")
+
+        def px(ft):
+            return left + (ft / model.span_ft) * (right - left)
+
+        for load in model.point_loads:
+            x = px(load.position_ft)
+            line(x, beam_y + 35, x, beam_y + 5, 1.2, "0.12 0.31 0.70")
+            commands.append(
+                f"0.12 0.31 0.70 RG 1.2 w {x:.1f} {beam_y+5:.1f} m "
+                f"{x-4:.1f} {beam_y+11:.1f} l {x+4:.1f} {beam_y+11:.1f} l h f"
+            )
+            text(x-16, beam_y + 39, f"{load.magnitude:.2f} k", "F2", 6)
+        for load in model.uniform_loads:
+            a, b = px(load.start_ft), px(load.end_ft)
+            count = max(3, min(14, int(abs(b-a)/24)))
+            for i in range(count + 1):
+                x = a + (b-a)*i/count
+                line(x, beam_y+28, x, beam_y+5, 0.8, "0.12 0.31 0.70")
+            text((a+b)/2-20, beam_y+31, f"{load.magnitude:.2f} k/ft", "F2", 6)
+        text(left-5, beam_y-38, "0 ft", "F2", 7)
+        text(right-24, beam_y-38, f"{model.span_ft:.2f} ft", "F2", 7)
+
+        if model.support == "simply-supported":
+            text(left-4, beam_y-25, f"RL {result['reactions']['left']:.2f} k", "F1", 7)
+            text(right-40, beam_y-25, f"RR {result['reactions']['right']:.2f} k", "F1", 7)
+        else:
+            text(left-4, beam_y-25, f"R {result['reactions']['left']:.2f} k", "F1", 7)
+            text(left+58, beam_y-25,
+                 f"Mfix {result['reactions']['moment']/12:.2f} kip-ft", "F1", 7)
+
+        def diagram(title, y, kind):
+            rect(36, y-6, 540, 66)
+            text(48, y+48, title, "F1", 9, "0.12 0.31 0.70")
+            base = y+20
+            dleft, dright = 72, 540
+            line(dleft, base, dright, base, 0.7, "0.75 0.79 0.84")
+
+            xs = [i*model.span_ft/160 for i in range(161)]
+            if kind == "shear":
+                values = [result["shear"]["at"](x*12) for x in xs]
+                scale = max(1.0, max(abs(v) for v in values))
+                unit = "kips"
+            elif kind == "moment":
+                values = [result["moment"]["at"](x*12)/12 for x in xs]
+                scale = max(1.0, max(abs(v) for v in values))
+                unit = "kip-ft"
+            else:
+                values = [result["deflection"]["at"](x*12) for x in xs]
+                scale = max(0.001, max(abs(v) for v in values))
+                unit = "in"
+
+            for i in range(len(xs)-1):
+                x1 = dleft + xs[i]/model.span_ft*(dright-dleft)
+                x2 = dleft + xs[i+1]/model.span_ft*(dright-dleft)
+                y1 = base - values[i]/scale*28
+                y2 = base - values[i+1]/scale*28
+                line(x1, y1, x2, y2, 1.2, "0.12 0.31 0.70")
+            text(dleft, y+48, unit, "F2", 6)
+
+        diagram("SHEAR DIAGRAM", 482, "shear")
+        diagram("MOMENT DIAGRAM", 404, "moment")
+        diagram("DEFLECTION DIAGRAM", 326, "deflection")
+
+        rect(36, 242, 264, 66)
+        rect(312, 242, 264, 66)
+        bending_ratio = result["bending"]["actual"]/result["bending"]["allowable"]
+        deflection_ratio = (
+            result["deflection_check"]["actual"]/result["deflection_check"]["allowable"]
+        )
+        text(48, 294, "BENDING CHECK", "F1", 9, "0.12 0.31 0.70")
+        text(48, 278,
+             f"Actual: {result['bending']['actual']:.2f} ksi",
+             "F2", 8)
+        text(48, 266,
+             f"Allowable: {result['bending']['allowable']:.2f} ksi",
+             "F2", 8)
+        text(48, 254,
+             f"Utilization: {bending_ratio*100:.1f}%   "
+             f"{'PASS' if result['bending']['pass'] else 'FAIL'}",
+             "F1", 8)
+        text(324, 294, "DEFLECTION CHECK", "F1", 9, "0.12 0.31 0.70")
+        text(324, 278,
+             f"Actual: {result['deflection_check']['actual']:.3f} in",
+             "F2", 8)
+        text(324, 266,
+             f"Allowable: {result['deflection_check']['allowable']:.3f} in",
+             "F2", 8)
+        text(324, 254,
+             f"Utilization: {deflection_ratio*100:.1f}%   "
+             f"{'PASS' if result['deflection_check']['pass'] else 'FAIL'}",
+             "F1", 8)
+
+        rect(36, 174, 540, 54)
+        text(48, 212, "MAXIMUM CALCULATED VALUES", "F1", 9, "0.12 0.31 0.70")
+        text(48, 196,
+             f"Shear: {result['shear']['max']:.2f} k at "
+             f"{result['shear']['location']/12:.2f} ft",
+             "F2", 8)
+        text(210, 196,
+             f"Moment: {result['moment']['max']/12:.2f} kip-ft at "
+             f"{result['moment']['location']/12:.2f} ft",
+             "F2", 8)
+        text(390, 196,
+             f"Deflection: {result['deflection']['max']:.3f} in at "
+             f"{result['deflection']['location']/12:.2f} ft",
+             "F2", 8)
+        recommendation = getattr(self, "recommended_section", None)
+        text(48, 182,
+             f"Lightest passing section: {recommendation or 'No section passes'}",
+             "F1", 8)
+
+        rect(36, 72, 540, 88)
+        text(48, 142, "LOADS AND REACTION SUMMARY", "F1", 9, "0.12 0.31 0.70")
+        for index, line_value in enumerate(point_text.split("\n")[:3]):
+            text(48, 126-index*10, line_value, "F2", 7)
+        for index, line_value in enumerate(uniform_text.split("\n")[:3]):
+            text(324, 126-index*10, line_value, "F2", 7)
+        text(48, 84,
+             f"Reactions: Left {result['reactions']['left']:.2f} k"
+             f"   Right {result['reactions']['right']:.2f} k"
+             f"   Fixed moment {result['reactions']['moment']/12:.2f} kip-ft",
+             "F2", 7)
+
+        line(36, 58, 576, 58, 0.7, "0.40 0.46 0.53")
+        text(36, 42,
+             "Educational use only. Verify calculations with a qualified engineer.",
+             "F1", 7, "0.40 0.46 0.53")
+
         stream = ("\n".join(commands) + "\n").encode("latin-1", "replace")
 
         objects = []
         objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
         objects.append(b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
         objects.append(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-                       b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>")
+                       b"/Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>")
+        objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
         objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
         objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") +
                        stream + b"endstream")

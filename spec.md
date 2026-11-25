@@ -138,9 +138,13 @@ floor beam or deck joist.
   Do not round values before comparisons.
 
 ## Desktop Report
-- Provide `Print / Save Report` actions using Tkinter-native dialog and printing
-  or PDF-export capabilities. The implementation must not require a web
-  browser or external Python dependency.
+- Provide a `Print / Save PDF` button using a native Tkinter Save As dialog.
+- Generate a dependency-free, US Letter portrait PDF without opening a browser
+  or requiring a PDF library.
+- Use a professional calculation-sheet layout with consistent margins,
+  section headers, bold labels, and readable 8–11 point typography.
+- Keep beam and diagram content inside the page and avoid clipped or overlapping
+  text.
 - Generate a clean US Letter portrait report containing:
   - report title and generated date
   - support type and span

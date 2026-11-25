@@ -1,4 +1,7 @@
 import unittest
+import tempfile
+import os
+from types import SimpleNamespace
 
 from beam_calculations import (
     BeamModel,
@@ -10,6 +13,7 @@ from beam_calculations import (
     design_to_dict,
     normalize_span,
 )
+from app import BeamDesignerApp
 
 
 class BeamCalculationValidationTests(unittest.TestCase):
@@ -186,6 +190,28 @@ class BeamCalculationValidationTests(unittest.TestCase):
         self.assertIn(17.75, positions)
         for left, right in zip(positions, positions[1:]):
             self.assertLessEqual(right - left, 0.2500001)
+
+    def test_professional_pdf_report_is_generated(self):
+        model = BeamModel(
+            span_ft=20,
+            uniform_loads=(UniformLoad(1.0, 0.0, 20.0),),
+        )
+        result = calculate(model)
+        fake_app = SimpleNamespace(
+            last_model=model,
+            last_result=result,
+            recommended_section="W12x26",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "beam-report.pdf")
+            BeamDesignerApp.write_pdf(fake_app, path)
+            with open(path, "rb") as report:
+                pdf = report.read()
+            self.assertTrue(pdf.startswith(b"%PDF-1.4"))
+            self.assertIn(b"/MediaBox [0 0 612 792]", pdf)
+            self.assertIn(b"BEAM DESIGNER", pdf)
+            self.assertIn(b"BENDING CHECK", pdf)
+            self.assertIn(b"Educational use only", pdf)
 
 
 if __name__ == "__main__":
