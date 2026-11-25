@@ -464,3 +464,64 @@ def find_lightest_passing(model: BeamModel) -> dict | None:
     if model.material == "steel":
         return sorted(passing, key=lambda s: (s["weight"], -s["Ix"]))[0]
     return passing[0]
+
+
+def build_results_table(model: BeamModel, result: dict) -> list:
+    positions = {0.0, model.span_ft}
+    for load in model.point_loads:
+        positions.add(load.position_ft)
+    for load in model.uniform_loads:
+        positions.add(load.start_ft)
+        positions.add(load.end_ft)
+
+    step = 0.25
+    position = 0.0
+    while position < model.span_ft:
+        positions.add(round(position * 4.0) / 4.0)
+        position += step
+
+    ordered = sorted(positions)
+    rows = []
+    for position_ft in ordered:
+        x_in = position_ft * 12.0
+        rows.append({
+            "Position x (ft)": position_ft,
+            "Shear V (kips)": result["shear"]["at"](x_in),
+            "Moment M (kip-ft)": result["moment"]["at"](x_in) / 12.0,
+            "Deflection (in)": result["deflection"]["at"](x_in),
+        })
+
+    shear_locations = sorted(
+        set(location for location in (
+            *[load.position_ft for load in model.point_loads],
+            *[load.start_ft for load in model.uniform_loads],
+            *[load.end_ft for load in model.uniform_loads],
+        ))
+    )
+    for location in shear_locations:
+        if 0.0 < location < model.span_ft:
+            eps = 1e-7
+            left_ft = location - eps
+            right_ft = location + eps
+            if left_ft >= 0.0:
+                left_x = left_ft * 12.0
+                rows.append({
+                    "Position x (ft)": left_ft,
+                    "Shear V (kips)": result["shear"]["at"](left_x),
+                    "Moment M (kip-ft)": result["moment"]["at"](left_x) / 12.0,
+                    "Deflection (in)": result["deflection"]["at"](left_x),
+                })
+            if right_ft <= model.span_ft:
+                right_x = right_ft * 12.0
+                rows.append({
+                    "Position x (ft)": right_ft,
+                    "Shear V (kips)": result["shear"]["at"](right_x),
+                    "Moment M (kip-ft)": result["moment"]["at"](right_x) / 12.0,
+                    "Deflection (in)": result["deflection"]["at"](right_x),
+                })
+
+    unique = {}
+    for row in rows:
+        key = round(row["Position x (ft)"], 7)
+        unique[key] = row
+    return [unique[key] for key in sorted(unique)]

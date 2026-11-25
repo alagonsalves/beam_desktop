@@ -156,6 +156,19 @@ floor beam or deck joist.
   - educational-use disclaimer
 - Report values must come from current inputs and unrounded calculation state.
 
+## CSV Export
+- An `Export Results` button writes the current beam calculations to a CSV file
+  through a native Save As dialog.
+- The CSV opens in spreadsheet software and has exactly these columns:
+  `Position x (ft)`, `Shear V (kips)`, `Moment M (kip-ft)`,
+  `Deflection (in)`.
+- Include positions at intervals of 0.25 ft or finer across the entire span.
+- Include the left and right span endpoints, all point-load locations, and all
+  uniform-load start/end positions. Include both sides of shear discontinuities
+  for point loads and uniform-load endpoints.
+- Export values must come from the current design and unrounded calculation
+  state, formatted with sufficient precision for current results.
+
 ## Validation
 1. Simply supported, 20 ft, W12x26, uniform 1 kip/ft over full span:
    reactions 10 k each; max shear 10 k; max moment 50.0 kip-ft at 10 ft;

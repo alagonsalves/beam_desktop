@@ -1,4 +1,5 @@
 import datetime
+import csv
 import json
 import os
 import tkinter as tk
@@ -11,6 +12,7 @@ from beam_calculations import (
     STEEL_SECTIONS,
     UniformLoad,
     calculate,
+    build_results_table,
     design_from_dict,
     design_to_dict,
     find_lightest_passing,
@@ -80,6 +82,9 @@ class BeamDesignerApp(tk.Tk):
                  font=("TkDefaultFont", 12, "bold"), width=3, height=1).pack(side="left", padx=(0, 10))
         tk.Label(brand, text="Beam Designer", bg="#ffffff", fg="#172033",
                  font=("TkDefaultFont", 16, "bold")).pack(side="left")
+        ttk.Button(header, text="Export Results", command=self.export_results).pack(
+            side="right", padx=(0, 8), pady=16
+        )
         ttk.Button(header, text="Print / Save PDF", command=self.save_pdf).pack(
             side="right", padx=28, pady=16
         )
@@ -722,6 +727,41 @@ class BeamDesignerApp(tk.Tk):
         if self.hover_window is not None and self.hover_window.winfo_exists():
             self.hover_window.destroy()
             self.hover_window = None
+
+    def export_results(self):
+        if not hasattr(self, "last_model") or not hasattr(self, "last_result"):
+            self.redraw()
+        path = filedialog.asksaveasfilename(
+            title="Export Beam Results",
+            defaultextension=".csv",
+            filetypes=[("CSV spreadsheet", "*.csv"), ("All files", "*.*")],
+            initialfile="beam-results.csv",
+        )
+        if not path:
+            return
+        try:
+            rows = build_results_table(self.last_model, self.last_result)
+            columns = [
+                "Position x (ft)",
+                "Shear V (kips)",
+                "Moment M (kip-ft)",
+                "Deflection (in)",
+            ]
+            with open(path, "w", encoding="utf-8-sig", newline="") as output:
+                writer = csv.writer(output, lineterminator="\r\n")
+                writer.writerow(columns)
+                for row in rows:
+                    writer.writerow([
+                        f"{row['Position x (ft)']:.4f}",
+                        f"{row['Shear V (kips)']:.12g}",
+                        f"{row['Moment M (kip-ft)']:.12g}",
+                        f"{row['Deflection (in)']:.12g}",
+                    ])
+        except (OSError, ValueError, tk.TclError) as exc:
+            messagebox.showerror("Could Not Export Results",
+                                 f"The results could not be exported:\n{exc}")
+            return
+        messagebox.showinfo("Results Exported", f"Exported results to:\n{path}")
 
     def save_design(self):
         path = filedialog.asksaveasfilename(

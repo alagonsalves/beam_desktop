@@ -5,6 +5,7 @@ from beam_calculations import (
     PointLoad,
     UniformLoad,
     calculate,
+    build_results_table,
     design_from_dict,
     design_to_dict,
     normalize_span,
@@ -168,6 +169,23 @@ class BeamCalculationValidationTests(unittest.TestCase):
         self.assertEqual(normalize_span(20.25), 20.25)
         with self.assertRaises(ValueError):
             normalize_span("not-a-number")
+
+    def test_export_results_table_grid_and_load_locations(self):
+        model = BeamModel(
+            span_ft=20,
+            point_loads=(PointLoad(10.0, 5.125),),
+            uniform_loads=(UniformLoad(1.0, 2.5, 17.75),),
+        )
+        result = calculate(model)
+        rows = build_results_table(model, result)
+        positions = [row["Position x (ft)"] for row in rows]
+        self.assertIn(0.0, positions)
+        self.assertIn(20.0, positions)
+        self.assertIn(5.125, positions)
+        self.assertIn(2.5, positions)
+        self.assertIn(17.75, positions)
+        for left, right in zip(positions, positions[1:]):
+            self.assertLessEqual(right - left, 0.2500001)
 
 
 if __name__ == "__main__":
